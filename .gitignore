@@ -1,0 +1,28 @@
+# AutoRNA Agent
+# Results, work dirs, downloaded data, and local run state — never commit.
+results/
+work/
+runs/
+data/test/
+data/reference/
+data/airway/
+data/*.fastq.gz
+data/*.fq.gz
+agent/runs.db
+agent/__pycache__/
+__pycache__/
+*.pyc
+.nextflow/
+.nextflow.log*
+.nextflow.history
+timeline.html
+report.html
+trace.txt
+dag.html
+*.log
+.DS_Store
+# Keep these tracked (do NOT ignore):
+#   data/samplesheet_test_3v3.csv
+#   data/samplesheet_airway_template.csv
+#   data/README.md
+#   scripts/fetch_test_data.sh

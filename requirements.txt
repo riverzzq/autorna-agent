@@ -1,0 +1,6 @@
+# AutoRNA Agent — Python dependencies (agent layer only)
+# Install: pip install -r requirements.txt
+# Python >= 3.10. Nextflow / Docker / R are separate (see README.md).
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6

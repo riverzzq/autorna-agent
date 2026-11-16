@@ -1,0 +1,7 @@
+sample,group,fastq_1,fastq_2,strandedness
+SRR6357070,WT,data/test/SRR6357070_1.fastq.gz,data/test/SRR6357070_2.fastq.gz,reverse
+SRR6357071,WT,data/test/SRR6357071_1.fastq.gz,data/test/SRR6357071_2.fastq.gz,reverse
+SRR6357072,WT,data/test/SRR6357072_1.fastq.gz,data/test/SRR6357072_2.fastq.gz,reverse
+SRR6357076,RAP1_IAA_30M,data/test/SRR6357076_1.fastq.gz,data/test/SRR6357076_2.fastq.gz,reverse
+SRR6357077,RAP1_IAA_30M,data/test/SRR6357077_1.fastq.gz,data/test/SRR6357077_2.fastq.gz,reverse
+SRR6357078,RAP1_IAA_30M,data/test/SRR6357078_1.fastq.gz,data/test/SRR6357078_2.fastq.gz,reverse

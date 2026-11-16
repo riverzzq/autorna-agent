@@ -1,0 +1,26 @@
+# TEMPLATE ONLY — DO NOT RUN AS-IS.
+# Human airway smooth muscle, dexamethasone vs untreated.
+# The SRR IDs below are the ones listed in the prep file (from the
+# teaching/tutorial record for this study). They are NOT yet verified
+# against GEO for this project.
+#
+# BEFORE using this file you MUST:
+#   1. Resolve the GEO accession (GSE...) for these SRRs with pysradb,
+#      e.g. `pysradb sra-to-gsm SRR1039508` / `pysradb gse-to-srr <GSE>`.
+#      Do NOT guess or invent a GSE number.
+#   2. Download the full FASTQ files with scripts/fetch_airway_data.sh
+#      (prefetch + fasterq-dump, or pysradb), then replace the placeholder
+#      paths below with the real local paths.
+#   3. Add the remaining cell lines (CL2, CL3, CL4) the same way, so the
+#      contrast is 3-4 untreated vs 3-4 dex — do not run DESeq2 on 1 vs 1.
+#   4. Use a human transcriptome + GTF (GRCh38), NOT the yeast files
+#      used for the test profile. A human Salmon index build takes
+#      much longer and needs much more memory; budget for that.
+#
+# Example rows (placeholders — paths do not exist yet):
+sample,group,fastq_1,fastq_2,strandedness
+SRR1039508,untreated,data/airway/SRR1039508_1.fastq.gz,data/airway/SRR1039508_2.fastq.gz,reverse
+SRR1039509,dex,data/airway/SRR1039509_1.fastq.gz,data/airway/SRR1039509_2.fastq.gz,reverse
+SRR1039510,alb,data/airway/SRR1039510_1.fastq.gz,data/airway/SRR1039510_2.fastq.gz,reverse
+SRR1039511,alb_dex,data/airway/SRR1039511_1.fastq.gz,data/airway/SRR1039511_2.fastq.gz,reverse
+SRR1039512,untreated,data/airway/SRR1039512_1.fastq.gz,data/airway/SRR1039512_2.fastq.gz,reverse
