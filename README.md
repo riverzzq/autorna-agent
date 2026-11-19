@@ -74,11 +74,54 @@ Done in this scaffold:
   `results/test/multiqc/multiqc_report.html`. No mapping-rate
   or runtime numbers are claimed here — check the report /
   Salmon `meta_info.json` per sample before quoting any.
+- **Agent end-to-end (Week 2, done for rule-based, LLM added):**
+  FastAPI `/health` returns ok; POST /jobs creates a queued run in
+  SQLite and POST /jobs/{id}/launch runs Nextflow in the background.
+  Natural-language entry POST /jobs/natural-language accepts e.g.
+  `{"text": "run the yeast test"}` / `{"text": "跑酵母测试"}`.
+  With OPENAI_API_KEY set it tries the OpenAI LLM first (gpt-4o-mini,
+  tool calling, output validated by parse_job_spec()); without a key,
+  or if the LLM fails, it falls back to the rule-based parser, which
+  only knows the yeast 3v3 case. The response includes
+  `"parser": "llm"` or `"rule"` so you can see which one parsed it.
+  Verified: run-ee0f4604 (structured, 42.0 s, succeeded) and
+  run-e90e6b98 (rule-based natural language, 40.1 s, succeeded).
+  To enable the LLM: create a key at platform.openai.com, then in the
+  terminal that runs uvicorn, `export OPENAI_API_KEY='sk-...'`
+  (never paste the key in chat, never commit it; .env is git-ignored).
+  Model override: OPENAI_MODEL, default gpt-4o-mini.
 
-TODO — Week 2:
-- LLM planner: natural-language → structured spec via tool calling,
-  validated by `parse_job_spec()` before anything launches.
-  (Currently raises `NotImplementedError` — do not claim it works.)
+TODO — Week 3:
+- [done, step 1] QC-gate parser: agent/qc.py reads percent_mapped
+  from Salmon meta_info.json + NumReads summed from quant.sf +
+  MultiQC general-stats rows; GET /jobs/{id}/qc returns the real
+  numbers and records qc_pass (1/0) in SQLite; a successful launch
+  also parses QC automatically. Tested locally: low-mapping sample
+  fails alone, all-~80% passes, missing quant.sf and zero reads fail.
+- [done, step 2] Auto-retry once on OOM: when a run fails with
+  error_kind=oom on attempt 0, the agent relaunches it once with
+  retry.config bumping every memory tier (single 2->4 GB, low 4->8
+  GB, medium 8->16 GB) via Nextflow `-c`; both attempts' logs are
+  kept and the attempt is recorded in the run's resources JSON.
+  Any other failure kind, or a second OOM, stops and needs a
+  human decision. A manual relaunch resets the attempt counter.
+- [done, step 3] DESeq2 (agent/deseq2.py, POST /jobs/{id}/deseq2):
+  runs scripts/deseq2.R on the run's real quant.sf files, only for
+  QC-passed samples; failed samples are named in
+  deseq2/excluded_samples.json. Pre-checks before R starts: GTF
+  yields >= 1 transcript_id/gene_id pair, and each contrast group
+  keeps >= 2 QC-passed replicates. Results parsed into
+  deseq2/summary.json (gene count, significant count, top 5 by
+  padj). Tested locally with a stub Rscript: all-pass, one-sample
+  excluded, too-few-replicates refused, bad GTF refused.
+  FIRST REAL R RUN still needs to happen on a machine with R +
+  tximport + DESeq2 installed (see "DESeq2 setup" below) and its
+  tx2gene row count + significant-gene count spot-checked.
+- [done, step 4] Per-run HTML report (agent/report.py,
+  GET /jobs/{id}/report): run status, QC table, DESeq2 summary
+  when present, excluded samples, links to the MultiQC report
+  and results.tsv. All numbers come from qc.json /
+  deseq2/summary.json on disk; nothing is invented.
 - Human genome wiring: human transcriptome/index + the airway
   3v3 dataset (template in `data/`, GSE must be resolved first).
 
@@ -150,7 +193,37 @@ Notes:
   set `NXF_SINGULARITY_CACHEDIR` to a writable directory if needed.
   Do not run the Docker profile on a shared HPC login node.
 
-## DESeq2 (after the first real run)
+## DESeq2 (Week 3, wired into the agent)
+
+R is NOT installed by this project. Check first:
+
+```bash
+Rscript --version
+Rscript -e 'library(tximport); library(DESeq2); message("ok")'
+```
+
+If either fails, install R (https://cran.r-project.org, macOS: the
+.pkg installer), then in R:
+
+```r
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+BiocManager::install(c("tximport", "DESeq2"))
+```
+
+Then trigger DESeq2 for a run (background thread; R can take minutes):
+
+```bash
+curl -X POST http://localhost:8000/jobs/run-9c783ca0/deseq2
+curl http://localhost:8000/jobs/run-9c783ca0/deseq2   # summary when done
+curl http://localhost:8000/jobs/run-9c783ca0/report  # one-page HTML report
+```
+
+Only QC-passed samples are used; failed samples are named in
+deseq2/excluded_samples.json. The first real R run must be
+spot-checked (tx2gene row count, counts, significant-gene count)
+before trusting any results table.
+
+Manual equivalent (same script, same checks):
 
 ```bash
 Rscript scripts/deseq2.R --quant_dir results/test/salmon \

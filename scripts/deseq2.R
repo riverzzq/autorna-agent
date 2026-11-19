@@ -1,11 +1,13 @@
 #!/usr/bin/env Rscript
-# AutoRNA Agent — DESeq2 stub (Week 1)
+# AutoRNA Agent — DESeq2 (Week 3, wired via POST /jobs/{run_id}/deseq2)
 #
-# STATUS: STUB — not yet run against real Salmon quant.sf output.
-# Wire it after the Week 1 pipeline produces quant.sf files, and
-# verify the tx2gene mapping against genes.gtf BEFORE trusting any
-# result table. This script fails loudly if inputs are missing; it
-# never fabricates results.
+# STATUS: wired into the agent (agent/deseq2.py). First real run must
+# still be spot-checked: tx2gene row count, counts, and the
+# significant-gene count, before trusting any result table.
+# The agent runs this only on QC-passed samples (agent/qc.py) and
+# refuses when a group would be left with fewer than 2 replicates.
+# This script fails loudly if inputs are missing; it never
+# fabricates results.
 #
 # Inputs:
 #   --quant_dir  directory containing <sample>/quant.sf per sample
@@ -137,4 +139,3 @@ sink()
 
 message(paste0("Done. ", sum(sig, na.rm = TRUE), " genes at padj<0.05 & |log2FC|>1 (of ",
                nrow(res_df), " tested). Outputs in ", outdir))
-message("STUB NOTE: first real run must be spot-checked (tx2gene, counts, QC) before use in any report.")

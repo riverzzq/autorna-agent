@@ -56,7 +56,26 @@ def write_samplesheet(spec, run_dir: Path) -> Path:
     return path
 
 
-def build_nextflow_command(spec, samplesheet: Path, run_dir: Path) -> list:
+def write_retry_config(run_dir: Path) -> Path:
+    """Write a Nextflow config that bumps every process memory tier.
+
+    Used for the one automatic OOM retry (Week 3): process_single
+    2 GB -> 4 GB, process_low 4 GB -> 8 GB, process_medium 8 GB ->
+    16 GB. Passed to Nextflow with `-c`, so the retry really runs
+    with more memory instead of just hoping the same config works.
+    """
+    path = Path(run_dir) / "retry.config"
+    path.write_text(
+        "process {\n"
+        "    withLabel: process_single { memory = '4.GB' }\n"
+        "    withLabel: process_low { memory = '8.GB' }\n"
+        "    withLabel: process_medium { memory = '16.GB' }\n"
+        "}\n"
+    )
+    return path
+
+
+def build_nextflow_command(spec, samplesheet: Path, run_dir: Path, extra_config: Path | None = None) -> list:
     """Build the Nextflow command. No shell=True, no string interpolation."""
     transcriptome = PROJECT_ROOT / "data" / "reference" / "transcriptome.fasta.gz"
     cmd = [
@@ -67,26 +86,30 @@ def build_nextflow_command(spec, samplesheet: Path, run_dir: Path) -> list:
         "-profile", spec.profile,
         "-work-dir", str(run_dir / "work"),
     ]
+    if extra_config is not None:
+        cmd += ["-c", str(extra_config)]
     return cmd
 
 
-def launch_run(spec, run_id: str | None = None) -> dict:
+def launch_run(spec, run_id: str | None = None, extra_config: Path | None = None, attempt: int = 0) -> dict:
     """Launch Nextflow synchronously and return a result dict.
 
     Returns {"run_id", "status": "succeeded"|"failed", "wall_time_s",
     "error_kind", "error", "log_path"}. The caller (app.py) is
     responsible for writing this into the SQLite run log.
     Use launch_run_async in app.py for the API so HTTP does not block.
+    `attempt` is the retry count (0 = first try); the log file is
+    kept per attempt so both attempts' logs survive a retry.
     """
     run_id = run_id or f"run-{uuid.uuid4().hex[:8]}"
     run_dir = PROJECT_ROOT / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     samplesheet = write_samplesheet(spec, run_dir)
-    cmd = build_nextflow_command(spec, samplesheet, run_dir)
-    log_path = run_dir / "nextflow.log"
+    cmd = build_nextflow_command(spec, samplesheet, run_dir, extra_config=extra_config)
+    log_path = run_dir / ("nextflow.log" if attempt == 0 else f"nextflow.attempt{attempt}.log")
     started = time.time()
     with open(log_path, "w") as log_f:
-        log_f.write(f"# AutoRNA run {run_id}\n# command: {' '.join(cmd)}\n\n")
+        log_f.write(f"# AutoRNA run {run_id} (attempt {attempt})\n# command: {' '.join(cmd)}\n\n")
         log_f.flush()
         proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), stdout=log_f, stderr=subprocess.STDOUT)
     wall = time.time() - started

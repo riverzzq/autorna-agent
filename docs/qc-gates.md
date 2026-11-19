@@ -13,7 +13,7 @@ They must be tuned after the first real runs and the reason for any
 change recorded in the run log / README. Do not present them as
 established standards.
 
-## Gates (applied after MultiQC, Week 3 parser — see status)
+## Gates (applied after MultiQC — parser implemented Week 3, agent/qc.py)
 
 | # | Gate | Source | Starting threshold | Fail action |
 |---|------|--------|--------------------|-------------|
@@ -23,7 +23,7 @@ established standards.
 | 4 | Salmon mapping rate | Salmon `quant.sf` / logs (`meta_info.json`: `percent_mapped`) | >= 50% (`params.min_mapping_rate`, default 0.5) | Sample = failed QC. Do not include it in DESeq2. Investigate: wrong reference? strandedness? contamination? |
 | 5 | Salmon assigned fragments | `quant.sf` NumReads summed | > 0 and within ~10x of the other samples in the same run | Sample = failed QC if 0 or an extreme outlier. Check the FASTQ / index. |
 | 6 | MultiQC general stats complete | `multiqc_report_data/` | one row per sample, no missing sample | Missing row = investigate that sample's logs before trusting the report. |
-| 7 | DESeq2 input sanity (Week 3) | `scripts/deseq2.R` | quant.sf exists for every sample in the contrast; tx2gene parsed > 0 rows | Script stops loudly (it already does). Do not hand-edit a results table to fill gaps. |
+| 7 | DESeq2 input sanity (Week 3, wired: agent/deseq2.py) | `scripts/deseq2.R` | quant.sf exists for every sample in the contrast; tx2gene parsed > 0 rows; each group keeps >= 2 QC-passed replicates | Script stops loudly (it already does). The agent runs DESeq2 only on QC-passed samples and names the excluded ones in deseq2/excluded_samples.json. Do not hand-edit a results table to fill gaps. |
 
 ### How to read the mapping rate (do not guess it)
 
@@ -60,16 +60,19 @@ always kept.
   container setup and resubmit.
 - Unknown → no retry. Read the log first.
 
-### Week 3 TODO (auto-retry, to implement, not to fake)
+### Week 3 (auto-retry implemented — agent/runner.py + agent/app.py)
 
-1. On OOM retry: relaunch the failed sample(s) with the next
-   memory tier (e.g. 8 GB → 16 GB), record `attempt` and the new
-   memory in the SQLite row, and keep both attempts' logs.
+1. On OOM retry: the agent relaunches the failed run ONCE with the
+   next memory tier via `runs/<run_id>/retry.config` (single 2->4 GB,
+   low 4->8 GB, medium 8->16 GB, passed to Nextflow with `-c`),
+   records `attempt` in the run's resources JSON, and keeps both
+   attempts' logs (`nextflow.log`, `nextflow.attempt1.log`).
 2. On QC-gate failure (mapping rate): do NOT retry with more
    memory — that does not fix a wrong reference. Log the sample
    as `qc_pass=0` and exclude it from DESeq2.
 3. Never retry more than once automatically. A second failure
-   needs a human decision, recorded in the run log.
+   needs a human decision, recorded in the run log. A manual
+   relaunch via POST /launch resets the attempt counter to 0.
 
 ## What a "passed" run looks like (for the README / interview)
 
@@ -79,4 +82,5 @@ always kept.
 - Every sample's `percent_mapped` >= the threshold in force,
   recorded in SQLite (`qc_pass=1`)
 - DESeq2 `results.tsv` exists only if all contrast samples passed
-  QC; otherwise the DESeq2 step is skipped and the reason is logged.
+  QC; otherwise DESeq2 runs on the QC-passed samples only and the
+  excluded samples are named in deseq2/excluded_samples.json.

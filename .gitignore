@@ -9,6 +9,8 @@ data/airway/
 data/*.fastq.gz
 data/*.fq.gz
 agent/runs.db
+.env
+.env.*
 agent/__pycache__/
 __pycache__/
 *.pyc
