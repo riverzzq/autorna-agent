@@ -1,6 +1,6 @@
 # AutoRNA Agent
 
-**Problem, in one paragraph (for interviews):** RNA-seq pipelines
+**Problem:** RNA-seq pipelines
 are brittle and need babysitting. A run fails halfway — out of
 memory, a missing file, a bad sample — and nobody notices until
 hours later, or the failure is quietly ignored and a results table
@@ -24,7 +24,7 @@ claim to be.
 ## Architecture
 
 ```
-Natural-language request (Week 2 TODO — LLM planner is a stub)
+Natural-language request 
         |
         v
 Structured job spec (JSON) ──► planner.py validates it
