@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoRNA</title>
+<style>
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { font-size: 1.5em; } h2 { font-size: 1.2em; margin-top: 1.8em; }
+  textarea { width: 100%; min-height: 64px; font-size: 1em; padding: 8px; box-sizing: border-box; }
+  button { padding: 6px 14px; font-size: 0.95em; margin: 4px 4px 4px 0; cursor: pointer; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  table { border-collapse: collapse; margin: 1em 0; width: 100%; }
+  th, td { border: 1px solid #ccc; padding: 5px 10px; text-align: left; font-size: 0.95em; }
+  th { background: #f0f0f0; }
+  pre { background: #f6f6f6; padding: 12px; overflow-x: auto; font-size: 0.9em; white-space: pre-wrap; }
+  .muted { color: #666; font-size: 0.9em; }
+  .status-succeeded { color: #1a7f37; font-weight: bold; }
+  .status-failed { color: #b3261e; font-weight: bold; }
+  .status-running { color: #9a6700; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>AutoRNA</h1>
+<p class="muted" id="health">Checking server…</p>
+
+<h2>New run — describe it in words</h2>
+<textarea id="nl-text" placeholder="e.g. run the yeast test / 跑酵母测试"></textarea><br>
+<button id="nl-btn" onclick="createRun()">Create run</button>
+<span class="muted">The request is parsed (LLM first, rule-based fallback) and validated before anything runs. Nothing launches until you press Launch.</span>
+<pre id="nl-result" hidden></pre>
+
+<h2>Understand a new dataset</h2>
+<p class="muted">Point at a folder of FASTQs on this machine, or paste SRA run IDs.
+The agent profiles it first — pairing, layout, read length, organism
+from ENA metadata, inferred groups — and proposes a samplesheet.
+It never runs anything here, and it asks instead of guessing.</p>
+<label>FASTQ folder (on this machine)<br>
+<input id="ds-folder" type="text" size="60" placeholder="/Users/riverzhu/Desktop/airway"></label><br>
+<label>SRA run IDs (comma or space separated)<br>
+<input id="ds-srr" type="text" size="60" placeholder="SRR1039508, SRR1039509"></label><br>
+<button onclick="profileDataset()">Profile dataset</button>
+<pre id="ds-result" hidden></pre>
+<div id="ds-proposal" hidden>
+  <h3>Proposal — check it, fix the groups, then create the run</h3>
+  <p class="muted" id="ds-summary"></p>
+  <p class="muted">Strandedness: Salmon runs with auto-detection (-l A), so the
+  samplesheet value does not change the run.</p>
+  <table>
+    <thead><tr><th>Sample</th><th>Group (edit me)</th><th>FASTQ 1</th><th>FASTQ 2</th></tr></thead>
+    <tbody id="ds-samples-body"></tbody>
+  </table>
+  <label>Contrast <input id="ds-contrast" type="text" size="30"></label><br>
+  <button id="ds-create-btn" onclick="createFromProposal()">Create run from this proposal</button>
+  <span class="muted" id="ds-create-note"></span>
+</div>
+
+<h2>Runs</h2>
+<button onclick="loadRuns()">Refresh</button>
+<span class="muted">Auto-refreshes every 10 seconds.</span>
+<table>
+  <thead><tr><th>Run</th><th>Contrast</th><th>Status</th><th>Wall time</th><th>QC</th><th>Actions</th></tr></thead>
+  <tbody id="runs-body"><tr><td colspan="6">Loading…</td></tr></tbody>
+</table>
+
+<h2>Details</h2>
+<pre id="detail">Press QC or DESeq2 on a run to see its numbers here.</pre>
+<p class="muted">Full API docs (every endpoint, try it in the browser): <a href="/docs" target="_blank">/docs</a></p>
+
+<script>
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch (e) { data = text; }
+  if (!res.ok) throw new Error(typeof data === 'string' ? data : (data.detail || res.statusText));
+  return data;
+}
+
+async function loadHealth() {
+  try {
+    const h = await api('/health');
+    document.getElementById('health').textContent =
+      'Server ' + h.status + ' · version ' + h.version + ' · planner: ' + h.llm_planner;
+  } catch (e) {
+    document.getElementById('health').textContent = 'Server not reachable: ' + e.message;
+  }
+}
+
+async function loadRuns() {
+  try {
+    const runs = await api('/jobs');
+    const body = document.getElementById('runs-body');
+    if (!runs.length) { body.innerHTML = '<tr><td colspan="6">No runs yet. Create one above.</td></tr>'; return; }
+    body.innerHTML = runs.map(r => {
+      const qc = r.qc_pass === null || r.qc_pass === undefined ? '—' : (r.qc_pass ? 'pass' : 'fail');
+      return '<tr><td>' + r.id + '</td><td>' + (r.contrast || '') + '</td>' +
+        '<td class="status-' + r.status + '">' + r.status + '</td>' +
+        '<td>' + (r.wall_time_s === null || r.wall_time_s === undefined ? '—' : r.wall_time_s + 's') + '</td>' +
+        '<td>' + qc + '</td><td>' +
+        '<button onclick="launchRun(\'' + r.id + '\')" ' + (r.status === 'running' ? 'disabled' : '') + '>Launch</button>' +
+        '<button onclick="showQc(\'' + r.id + '\')">QC</button>' +
+        '<button onclick="startDeseq2(\'' + r.id + '\')">DESeq2</button>' +
+        '<button onclick="showDeseq2(\'' + r.id + '\')">DESeq2 result</button>' +
+        '<button onclick="window.open(\'/jobs/' + r.id + '/report\', \'_blank\')">Report</button>' +
+        '</td></tr>';
+    }).join('');
+  } catch (e) {
+    document.getElementById('runs-body').innerHTML = '<tr><td colspan="6">Failed to load runs: ' + e.message + '</td></tr>';
+  }
+}
+
+async function createRun() {
+  const text = document.getElementById('nl-text').value.trim();
+  if (!text) { alert('Type a request first, e.g. run the yeast test'); return; }
+  const out = document.getElementById('nl-result');
+  out.hidden = false; out.textContent = 'Parsing…';
+  try {
+    const r = await api('/jobs/natural-language', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    });
+    out.textContent = 'Created ' + r.run_id + ' (' + r.status + ')\ncontrast: ' + r.contrast +
+      '\nparsed by: ' + r.parser + '\nPress Launch on that run to start Nextflow.';
+    loadRuns();
+  } catch (e) { out.textContent = 'Could not create run: ' + e.message; }
+}
+
+async function launchRun(id) {
+  try {
+    await api('/jobs/' + id + '/launch', { method: 'POST' });
+    document.getElementById('detail').textContent = id + ': launching… press Refresh in a minute to see the status.';
+    loadRuns();
+  } catch (e) { alert('Launch failed: ' + e.message); }
+}
+
+async function showQc(id) {
+  const el = document.getElementById('detail');
+  el.textContent = 'Loading QC for ' + id + '…';
+  try { el.textContent = JSON.stringify(await api('/jobs/' + id + '/qc'), null, 2); }
+  catch (e) { el.textContent = 'QC failed: ' + e.message; }
+}
+
+async function startDeseq2(id) {
+  const el = document.getElementById('detail');
+  el.textContent = 'Starting DESeq2 for ' + id + '… (R can take a minute or two)';
+  try {
+    await api('/jobs/' + id + '/deseq2', { method: 'POST' });
+    el.textContent = id + ': DESeq2 running… press “DESeq2 result” in a minute.';
+  } catch (e) { el.textContent = 'DESeq2 failed to start: ' + e.message; }
+}
+
+async function showDeseq2(id) {
+  const el = document.getElementById('detail');
+  el.textContent = 'Loading DESeq2 summary for ' + id + '…';
+  try { el.textContent = JSON.stringify(await api('/jobs/' + id + '/deseq2'), null, 2); }
+  catch (e) { el.textContent = 'DESeq2 result failed: ' + e.message; }
+}
+
+let currentProposal = null;
+
+async function profileDataset() {
+  const folder = document.getElementById('ds-folder').value.trim();
+  const srrText = document.getElementById('ds-srr').value.trim();
+  const srr_ids = srrText ? srrText.split(/[,\s]+/).filter(Boolean) : null;
+  if (!folder && !srr_ids) { alert('Give a folder path or SRA run IDs first.'); return; }
+  const out = document.getElementById('ds-result');
+  out.hidden = false; out.textContent = 'Profiling… (ENA lookup can take a few seconds)';
+  document.getElementById('ds-proposal').hidden = true;
+  try {
+    const p = await api('/datasets/profile', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder: folder || null, srr_ids: srr_ids })
+    });
+    currentProposal = p;
+    out.textContent = 'Organism: ' + (p.organism || 'unknown') +
+      ' · layout: ' + (p.layout || 'unknown') +
+      ' · sampled read lengths: ' + (p.read_lengths_sampled.join(', ') || 'unknown') +
+      ' · groups found (' + p.group_source + '): ' + Object.keys(p.groups).join(', ') +
+      '\nQuestions:\n' + (p.questions.length ? p.questions.map(q => '- ' + q).join('\n') : '- none');
+    document.getElementById('ds-summary').textContent =
+      'Reference: ' + (p.reference.genome || 'unknown') +
+      (p.reference.wired ? ' (wired — can run)' : ' (NOT wired yet — Step 2 will add it)') +
+      (p.reference.note ? ' — ' + p.reference.note : '');
+    document.getElementById('ds-samples-body').innerHTML = p.samples.map(s =>
+      '<tr><td>' + s.sample + '</td>' +
+      '<td><input class="ds-group" data-sample="' + s.sample + '" value="' + s.group + '" size="14"></td>' +
+      '<td>' + (s.fastq_1 || 'not downloaded') + '</td>' +
+      '<td>' + (s.fastq_2 || '—') + '</td></tr>'
+    ).join('');
+    document.getElementById('ds-contrast').value = p.contrast_proposal || '';
+    const missingFastq = p.samples.some(s => !s.fastq_1);
+    const note = document.getElementById('ds-create-note');
+    if (!p.reference.wired) note.textContent = 'Reference not wired yet — download the FASTQs and wait for Step 2 (reference download).';
+    else if (missingFastq) note.textContent = 'Some FASTQs are not on this machine yet — download them first.';
+    else note.textContent = '';
+    document.getElementById('ds-create-btn').disabled = !p.reference.wired || missingFastq;
+    document.getElementById('ds-proposal').hidden = false;
+  } catch (e) { out.textContent = 'Profiling failed: ' + e.message; }
+}
+
+async function createFromProposal() {
+  if (!currentProposal) return;
+  const groupInputs = document.querySelectorAll('.ds-group');
+  const groupBySample = {};
+  groupInputs.forEach(el => { groupBySample[el.dataset.sample] = el.value.trim(); });
+  const samples = currentProposal.samples.map(s => ({
+    sample: s.sample,
+    group: groupBySample[s.sample] || s.group,
+    fastq_1: s.fastq_1,
+    fastq_2: s.fastq_2,
+    strandedness: 'reverse'
+  }));
+  const contrast = document.getElementById('ds-contrast').value.trim();
+  try {
+    const r = await api('/jobs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ samples: samples, contrast: contrast, genome: currentProposal.reference.genome })
+    });
+    alert('Created ' + r.run_id + ' (' + r.status + '). Press Launch on that run to start.');
+    loadRuns();
+  } catch (e) { alert('Could not create run: ' + e.message); }
+}
+
+loadHealth();
+loadRuns();
+setInterval(loadRuns, 10000);
+</script>
+</body>
+</html>

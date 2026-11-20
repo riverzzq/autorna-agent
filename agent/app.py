@@ -34,8 +34,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import db as rundb
+from .dataset import profile_dataset
 from .deseq2 import run_deseq2
 from .planner import parse_job_spec, parse_natural_language_with_source
 from .qc import compute_qc_for_run
@@ -46,7 +48,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 import os
 
-app = FastAPI(title="AutoRNA Agent", version="0.5.0-week3-full")
+app = FastAPI(title="AutoRNA Agent", version="0.7.0-dataset-understanding")
+
+# Web UI for people who do not use the terminal: open
+# http://localhost:8000/ui — create a run in words, launch it,
+# check QC and DESeq2, and open the report, all by clicking.
+# The auto-generated API docs live at /docs.
+app.mount("/ui", StaticFiles(directory=Path(__file__).resolve().parent / "static", html=True), name="ui")
 
 
 def _conn():
@@ -57,7 +65,7 @@ def _conn():
 def health():
     return {
         "status": "ok",
-        "version": "0.5.0-week3-full",
+        "version": "0.7.0-dataset-understanding",
         "llm_planner": "openai (gpt-4o-mini) + rule-based fallback" if os.environ.get("OPENAI_API_KEY") else "rule-based (set OPENAI_API_KEY to enable LLM)",
     }
 
@@ -310,3 +318,25 @@ def get_report(run_id: str):
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail=f"no such run: {run_id}")
     return build_report(run_dir).read_text()
+
+
+@app.post("/datasets/profile")
+def profile_new_dataset(body: dict):
+    """Understand a new dataset before proposing a run.
+
+    Body: {"folder": "/path/to/fastqs"} and/or {"srr_ids": ["SRR..."]}.
+    Returns the profile: layout, read lengths, organism + reference,
+    inferred groups, a contrast proposal (or None when ambiguous),
+    a samplesheet proposal, and the questions that need a human
+    answer. It never runs the pipeline and never invents metadata.
+    """
+    folder = body.get("folder") or None
+    srr_ids = body.get("srr_ids") or None
+    if not folder and not srr_ids:
+        raise HTTPException(status_code=400, detail="give a folder path and/or srr_ids")
+    try:
+        return profile_dataset(folder=folder, srr_ids=srr_ids)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"profiling failed: {exc}")

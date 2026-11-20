@@ -24,7 +24,7 @@ claim to be.
 ## Architecture
 
 ```
-Natural-language request 
+Natural-language request (LLM planner done: OpenAI gpt-4o-mini + rule fallback, response shows "parser": "llm" or "rule")
         |
         v
 Structured job spec (JSON) ──► planner.py validates it
@@ -44,18 +44,18 @@ Nextflow DSL2 (main.nf)
         │   outputs: results/fastqc/, results/salmon/<sample>/quant.sf,
         │            results/multiqc/multiqc_report.html
         v
-QC gates (docs/qc-gates.md; parser = Week 3 TODO)
+QC gates (agent/qc.py, GET /jobs/{id}/qc; parser done, verified on real data)
         │   mapping rate, FastQC, completeness — logged, never faked
         v
-DESeq2 (scripts/deseq2.R — stub, wire after first real run)
+DESeq2 (scripts/deseq2.R + agent/deseq2.py, POST /jobs/{id}/deseq2; verified on real data)
         └── results/deseq2/results.tsv + volcano.pdf
 Every run, success or failure, is a row in agent/runs.db
 (id, samples, contrast, status, wall_time_s, resources, qc_pass, error).
 ```
 
-## What is done (Week 1) vs TODO (Weeks 2–3)
+## What is done
 
-Done in this scaffold:
+Done:
 - Nextflow DSL2 pipeline: FastQC → Salmon quant → MultiQC, with
   docker / singularity / standard profiles and a `test` profile.
 - Test samplesheet: clean paired-end 3v3 yeast subset from
@@ -64,7 +64,9 @@ Done in this scaffold:
 - Data-fetch script for the test data (~27 MB).
 - Agent skeleton: FastAPI app, spec validation, Nextflow launcher,
   SQLite run log, failure classification + retry decision function.
-- DESeq2 R script (stub — logic written, not yet run on real quant.sf).
+- DESeq2 R script (scripts/deseq2.R + agent/deseq2.py): wired to the
+  agent and verified on real data 2026-11-18 — run-9c783ca0, 124 genes,
+  124 tx2gene pairs, 1 significant, top 5 all downregulated.
 - QC-gates design doc with thresholds marked as starting points.
 - Smoke test for tools / structure / Python + shell syntax.
 - **First real run completed 2026-11-16** on a MacBook Air,
@@ -91,7 +93,7 @@ Done in this scaffold:
   (never paste the key in chat, never commit it; .env is git-ignored).
   Model override: OPENAI_MODEL, default gpt-4o-mini.
 
-TODO — Week 3:
+Week 3 — done:
 - [done, step 1] QC-gate parser: agent/qc.py reads percent_mapped
   from Salmon meta_info.json + NumReads summed from quant.sf +
   MultiQC general-stats rows; GET /jobs/{id}/qc returns the real
@@ -114,9 +116,11 @@ TODO — Week 3:
   deseq2/summary.json (gene count, significant count, top 5 by
   padj). Tested locally with a stub Rscript: all-pass, one-sample
   excluded, too-few-replicates refused, bad GTF refused.
-  FIRST REAL R RUN still needs to happen on a machine with R +
-  tximport + DESeq2 installed (see "DESeq2 setup" below) and its
-  tx2gene row count + significant-gene count spot-checked.
+  First real R run done 2026-11-18 on run-9c783ca0: 124 genes, 124
+  tx2gene pairs, 1 significant (padj < 0.05 and |log2FC| > 1), top 5
+  by padj YAR009C, YAR010C, YAL038W, YAL003W, YAL037C-B, all
+  downregulated. Only 124 genes because the subsampled test reference
+  contains only 124 transcripts.
 - [done, step 4] Per-run HTML report (agent/report.py,
   GET /jobs/{id}/report): run status, QC table, DESeq2 summary
   when present, excluded samples, links to the MultiQC report
@@ -125,15 +129,28 @@ TODO — Week 3:
 - Human genome wiring: human transcriptome/index + the airway
   3v3 dataset (template in `data/`, GSE must be resolved first).
 
-TODO — Week 3:
-- QC-gate parser: read `percent_mapped` from Salmon
-  `meta_info.json` + MultiQC data, set `qc_pass` in SQLite.
-- Auto-retry once on OOM with more memory, logged with attempt #.
-- HTML report + README demo (commands + one real run's outputs).
-
 Explicitly NOT in scope: an ML runtime predictor, a large TCGA
 run, cloud (AWS Batch) before the local run is stable, and any
 PSC data (this project uses public data and needs no PSC approval).
+
+## Web UI (no terminal needed)
+
+Start the server as usual (`uvicorn agent.app:app --reload --port 8000`),
+then open in a browser:
+
+- **http://localhost:8000/ui** — the AutoRNA page: type a request in
+  words, create a run, launch it, check QC and DESeq2, and open the
+  report, all by clicking. No terminal, no curl. It also has an
+  "Understand a new dataset" section: give a FASTQ folder path or
+  SRA run IDs, see the profile (layout, read length, organism,
+  inferred groups) and the questions it raises, fix the groups in
+  the table, and create a run from the proposal.
+- **http://localhost:8000/docs** — the auto-generated API docs: every
+  endpoint with a "Try it out" button.
+
+The UI is a single file, `agent/static/index.html` (plain HTML/JS,
+no build step, no new dependency); it calls the same API the
+terminal commands use, so the page and the terminal always agree.
 
 ## Setup
 
@@ -193,7 +210,26 @@ Notes:
   set `NXF_SINGULARITY_CACHEDIR` to a writable directory if needed.
   Do not run the Docker profile on a shared HPC login node.
 
-## DESeq2 (Week 3, wired into the agent)
+## Dataset understanding (Step 1 — more agent-like)
+
+`agent/dataset.py`, `POST /datasets/profile`, and the "Understand a
+new dataset" section of the UI. Give a local FASTQ folder and/or SRA
+run IDs; the agent profiles first and asks instead of guessing:
+
+- local folder: pairs _1/_2 files, detects paired vs single-end,
+  samples read length, infers groups from file names (dex_rep1 ->
+  dex; plain numeric IDs like SRR6357070 are left alone, not
+  merged);
+- SRA IDs: real metadata from the ENA API (organism, layout, sample
+  title). Verified 2026-11-18: the 5 airway SRRs are all Homo
+  sapiens, PAIRED, groups untreated / Dex / Alb / Alb_Dex — a
+  2-factor design, so no single contrast is proposed and the agent
+  asks which contrast to run. An unknown ID is reported as not
+  found; the GEO accession is never invented.
+- strandedness is not guessed: Salmon already runs with `-l A`
+  (auto-detect), so the samplesheet value does not change the run.
+- human reference (GRCh38) is NOT wired yet: a human proposal stops
+  with a clear message. Automatic reference download is Step 2.
 
 R is NOT installed by this project. Check first:
 
@@ -219,9 +255,8 @@ curl http://localhost:8000/jobs/run-9c783ca0/report  # one-page HTML report
 ```
 
 Only QC-passed samples are used; failed samples are named in
-deseq2/excluded_samples.json. The first real R run must be
-spot-checked (tx2gene row count, counts, significant-gene count)
-before trusting any results table.
+deseq2/excluded_samples.json. The first real R run was spot-checked 2026-11-18 (run-9c783ca0:
+tx2gene 124 pairs, 124 genes, 1 significant).
 
 Manual equivalent (same script, same checks):
 
@@ -251,7 +286,8 @@ than the yeast test; do not start it until the yeast test passes.
   `data/reference/`, `data/airway/`, or `agent/runs.db` — see
   `.gitignore`. Data is fetched by script, not stored in git.
 - First real run completed 2026-11-16 (see above), so pushing
-  to GitHub is now OK. Keep the stub warnings honest: the LLM
-  planner and DESeq2 are still TODO until they have run for real.
+  to GitHub is now OK. The LLM planner and DESeq2 have both run for
+  real (run-9c783ca0, 2026-11-18) — keep every number in this README
+  tied to a real run.
 - No QC numbers, runtimes, or results are claimed anywhere in
   this repo until a real run produces them.
